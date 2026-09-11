@@ -1,0 +1,26 @@
+{
+  "name": "@devin/laufwerk-workflows",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "exports": {
+    "./hello": "./src/workflows/hello/workflow.ts",
+    "./github-issue": "./src/workflows/github-issue/workflow.ts",
+    "./issue-to-fix": "./src/workflows/issue-to-fix/workflow.ts",
+    "./components/after-run-cleanup": "./src/components/after-run-cleanup.ts",
+    "./tasks/github-issue": "./src/tasks/github-issue.ts"
+  },
+  "dependencies": {
+    "@effect/workflow": "0.19.1",
+    "@laufwerk/execution": "0.0.1-alpha.12",
+    "@laufwerk/sdk": "0.0.1-alpha.12",
+    "effect": "3.22.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.9",
+    "typescript": "7.0.2"
+  }
+}
