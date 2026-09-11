@@ -1,4 +1,4 @@
-import { Excalidraw } from "@excalidraw/excalidraw";
+import { Excalidraw, restore } from "@excalidraw/excalidraw";
 import type { AppState, BinaryFiles, ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
@@ -7,9 +7,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type Scene = { elements: readonly ExcalidrawElement[]; appState: Partial<AppState>; files: BinaryFiles };
 type Board = { id: string; revision: number; scene: Scene; updatedAt: string };
 type Feedback = { id: number; itemId: string | null; action: string; comment: string | null; createdAt: string };
+type CompactAppState = Pick<AppState, "viewBackgroundColor" | "scrollX" | "scrollY" | "zoom" | "gridSize" | "theme">;
 const boardId = new URLSearchParams(location.search).get("board") || "main";
 
-function compactAppState(state: AppState): Partial<AppState> {
+function compactAppState(state: CompactAppState): CompactAppState {
   return {
     viewBackgroundColor: state.viewBackgroundColor,
     scrollX: state.scrollX,
@@ -46,13 +47,18 @@ export function App() {
     try {
       setStatus("Loading board");
       const [nextBoard, events] = await Promise.all([request(`/api/boards/${encodeURIComponent(boardId)}`), request(`/api/boards/${encodeURIComponent(boardId)}/feedback`)]);
+      const restored = restore(nextBoard.scene, null, null);
+      const scene: Scene = { elements: restored.elements, appState: compactAppState(restored.appState), files: restored.files };
       hydrating.current = true;
       currentRevision.current = nextBoard.revision;
-      setBoard(nextBoard);
+      lastScene.current = JSON.stringify(scene);
+      setBoard({ ...nextBoard, scene });
       setFeedback(events);
-      apiRef.current?.addFiles(Object.values(nextBoard.scene.files));
-      apiRef.current?.updateScene({ elements: nextBoard.scene.elements, appState: nextBoard.scene.appState });
-      queueMicrotask(() => { hydrating.current = false; });
+      apiRef.current?.addFiles(Object.values(scene.files));
+      apiRef.current?.updateScene({ elements: scene.elements, appState: restored.appState });
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      // ponytail: absorb Excalidraw's initial render burst; use a hydration callback if the library adds one.
+      saveTimer.current = setTimeout(() => { hydrating.current = false; }, 100);
       setStatus("Saved");
     } catch (error) {
       setStatus(error instanceof Error && "status" in error && error.status === 401 ? "Token rejected" : "Could not load board");
@@ -75,9 +81,15 @@ export function App() {
 
   const onChange = useCallback((elements: readonly ExcalidrawElement[], appState: AppState, files: BinaryFiles) => {
     setSelectedId(Object.keys(appState.selectedElementIds)[0] ?? null);
-    if (hydrating.current || !board) return;
+    if (!board) return;
     const scene = { elements, appState: compactAppState(appState), files };
     const serialized = JSON.stringify(scene);
+    if (hydrating.current) {
+      lastScene.current = serialized;
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => { hydrating.current = false; }, 100);
+      return;
+    }
     if (serialized === lastScene.current) return;
     lastScene.current = serialized;
     if (saveTimer.current) clearTimeout(saveTimer.current);

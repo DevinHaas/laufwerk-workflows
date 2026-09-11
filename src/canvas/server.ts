@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { CanvasStore, RevisionConflict, type Feedback, type ImageInput, type JsonObject, type Scene } from "./store";
 
@@ -82,6 +83,7 @@ function staticFile(pathname: string): Response {
   const path = resolve("dist", relative);
   const root = resolve("dist");
   if (!path.startsWith(`${root}/`) && path !== root) return new Response("Not found", { status: 404 });
+  if (!existsSync(path)) return new Response("Not found", { status: 404 });
   const file = Bun.file(path);
   return new Response(file);
 }
