@@ -1,6 +1,4 @@
-/node_modules/
-/.runs/
-.env
-.env.*
-!.env.example
-*.tsbuildinfo
+data/
+dist/
+node_modules/
+.DS_Store
