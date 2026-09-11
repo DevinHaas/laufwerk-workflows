@@ -30,6 +30,7 @@ export function App() {
   const [status, setStatus] = useState("Loading board");
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastScene = useRef("");
   const currentRevision = useRef(0);
   const hydrating = useRef(true);
 
@@ -75,8 +76,12 @@ export function App() {
   const onChange = useCallback((elements: readonly ExcalidrawElement[], appState: AppState, files: BinaryFiles) => {
     setSelectedId(Object.keys(appState.selectedElementIds)[0] ?? null);
     if (hydrating.current || !board) return;
+    const scene = { elements, appState: compactAppState(appState), files };
+    const serialized = JSON.stringify(scene);
+    if (serialized === lastScene.current) return;
+    lastScene.current = serialized;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => void save({ elements, appState: compactAppState(appState), files }), 900);
+    saveTimer.current = setTimeout(() => void save(scene), 900);
   }, [board, save]);
 
   async function react(action: string, text?: string) {

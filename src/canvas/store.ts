@@ -179,7 +179,7 @@ export class CanvasStore {
     if (!Array.isArray(scene.elements) || typeof scene.appState !== "object" || typeof scene.files !== "object") {
       throw new Error("Invalid Excalidraw scene");
     }
-    const current = this.db.query("SELECT revision FROM boards WHERE id = ?").get(id) as { revision: number };
+    const current = this.db.query("SELECT revision, scene_json FROM boards WHERE id = ?").get(id) as { revision: number; scene_json: string };
     if (current.revision !== expectedRevision) throw new RevisionConflict(current.revision);
 
     const stored = structuredClone(scene);
@@ -205,9 +205,12 @@ export class CanvasStore {
       file.dataURL = "";
     }
 
+    const serialized = JSON.stringify(stored);
+    if (serialized === current.scene_json) return this.readBoard(id);
+
     const now = new Date().toISOString();
     const result = this.db.query("UPDATE boards SET scene_json = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?")
-      .run(JSON.stringify(stored), now, id, expectedRevision);
+      .run(serialized, now, id, expectedRevision);
     if (result.changes !== 1) {
       const latest = this.db.query("SELECT revision FROM boards WHERE id = ?").get(id) as { revision: number };
       throw new RevisionConflict(latest.revision);
