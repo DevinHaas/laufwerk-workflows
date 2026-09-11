@@ -19,7 +19,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   background: radial-gradient(circle at 50% 35%, #f7faf9 0 18%, transparent 52%), #cfdcda;
 }
 
-.gate form { width: min(420px, 100%); padding: 44px; background: #f7faf9; border-left: 8px solid #29c7a3; box-shadow: 0 24px 80px rgba(24, 32, 31, .16); }
+.gate form { width: min(420px, 100%); padding: 44px; background: #f7faf9; box-shadow: 0 24px 80px rgba(24, 32, 31, .16); }
 .mark { color: #ff6b5d; font-size: 34px; }
 h1 { margin: 8px 0 4px; font-size: clamp(32px, 6vw, 50px); letter-spacing: -.05em; }
 .gate p { color: #556563; line-height: 1.5; }
@@ -42,7 +42,7 @@ header { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; pad
 .canvas .excalidraw { --color-primary: #168f76; }
 
 aside { position: relative; min-height: 0; overflow-y: auto; border-left: 1px solid #b7c7c4; background: #e9f0ef; }
-.revision { height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-left: 7px solid #29c7a3; border-bottom: 1px solid #b7c7c4; }
+.revision { height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-bottom: 1px solid #b7c7c4; }
 .revision span { color: #60716e; font-size: 13px; }
 .revision strong { font-size: 28px; font-weight: 520; font-variant-numeric: tabular-nums; }
 aside section { padding: 22px; border-bottom: 1px solid #b7c7c4; }
