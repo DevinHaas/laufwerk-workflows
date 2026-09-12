@@ -292,10 +292,8 @@ async function browserEvidence(target: URL, outputDir: string, maxPages: number)
         continue;
       }
       pages.push(page);
-      for (const [suffix, mobile] of [["desktop", false], ["mobile", true]] as const) {
-        try { await capture(client, page, outputDir, `page-${number}-${suffix}`, mobile); }
-        catch (error) { await writeFile(join(outputDir, `page-${number}-${suffix}-error.txt`), String(error)); }
-      }
+      try { await capture(client, page, outputDir, `page-${number}-desktop`, false); }
+      catch (error) { await writeFile(join(outputDir, `page-${number}-desktop-error.txt`), String(error)); }
     }
     return pages;
   } finally {
@@ -305,10 +303,37 @@ async function browserEvidence(target: URL, outputDir: string, maxPages: number)
   }
 }
 
+export async function collectTechnologyDetection(targetUrl: string, outputDir: string): Promise<void> {
+  const executable = process.env.HTTPX_PATH || Bun.which("httpx");
+  if (!executable) throw new Error("ProjectDiscovery httpx is unavailable; install it or set HTTPX_PATH");
+  const probe = Bun.spawn([
+    executable, "-u", targetUrl, "-json", "-silent", "-td", "-server", "-cdn", "-cname", "-ip", "-rt",
+    "-nfs", "-timeout", "10", "-retries", "0", "-rstr", "5000000", "-no-stdin", "-duc",
+  ], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => probe.kill(), 20_000);
+  const [exitCode, stdout, stderr] = await Promise.all([
+    probe.exited,
+    new Response(probe.stdout).text(),
+    new Response(probe.stderr).text(),
+  ]).finally(() => clearTimeout(timer));
+  if (exitCode !== 0 || !stdout.trim()) throw new Error(stderr.trim() || `httpx exited with code ${exitCode}`);
+  try { for (const line of stdout.trim().split("\n")) JSON.parse(line); }
+  catch { throw new Error("httpx returned invalid JSONL"); }
+  await writeFile(join(outputDir, "technology-detection.jsonl"), stdout);
+}
+
+async function timed<T>(timings: Record<string, number>, name: string, task: () => Promise<T>): Promise<T> {
+  const started = performance.now();
+  try { return await task(); }
+  finally { timings[name] = Math.round(performance.now() - started); }
+}
+
 export async function collectPotentialCustomerEvidence(options: CollectEvidenceOptions) {
+  const started = performance.now();
+  const timings: Record<string, number> = {};
   const source = await realpath(resolve(options.source));
   if (!(await stat(source)).isDirectory()) throw new Error("source must be an existing directory");
-  const target = await fetchPublic(options.url, true);
+  const target = await timed(timings, "targetFetch", () => fetchPublic(options.url, true));
   const targetUrl = new URL(target.url);
   const company = options.company?.trim() || targetUrl.hostname.replace(/^www\./, "");
   const date = new Intl.DateTimeFormat("en-CA", { timeZone: options.timeZone }).format(new Date());
@@ -319,22 +344,36 @@ export async function collectPotentialCustomerEvidence(options: CollectEvidenceO
     writeFile(join(outputDir, "target-response.html"), target.body),
     writeFile(join(outputDir, "target-response.json"), JSON.stringify({ ...target, body: undefined }, null, 2)),
   ]);
-  let pages = [target.url];
-  try { pages = await browserEvidence(targetUrl, outputDir, options.maxPages); }
-  catch (error) { await writeFile(join(outputDir, "browser-evidence-error.txt"), String(error)); }
-  try {
-    const pricing = await fetchPublic(options.bleatPricingUrl, false);
-    await writeFile(join(outputDir, "bleat-pricing.html"), pricing.body);
-    await writeFile(join(outputDir, "bleat-pricing-source.json"), JSON.stringify({ ...pricing, body: undefined }, null, 2));
-  } catch (error) {
-    await writeFile(join(outputDir, "bleat-pricing-error.txt"), String(error));
-  }
+  const [pages] = await Promise.all([
+    timed(timings, "browserEvidence", async () => {
+      try { return await browserEvidence(targetUrl, outputDir, options.maxPages); }
+      catch (error) {
+        await writeFile(join(outputDir, "browser-evidence-error.txt"), String(error));
+        return [target.url];
+      }
+    }),
+    timed(timings, "bleatPricing", async () => {
+      try {
+        const pricing = await fetchPublic(options.bleatPricingUrl, false);
+        await writeFile(join(outputDir, "bleat-pricing.html"), pricing.body);
+        await writeFile(join(outputDir, "bleat-pricing-source.json"), JSON.stringify({ ...pricing, body: undefined }, null, 2));
+      } catch (error) {
+        await writeFile(join(outputDir, "bleat-pricing-error.txt"), String(error));
+      }
+    }),
+    timed(timings, "technologyDetection", async () => {
+      try { await collectTechnologyDetection(target.url, outputDir); }
+      catch (error) { await writeFile(join(outputDir, "technology-detection-error.txt"), String(error)); }
+    }),
+  ]);
+  timings.total = Math.round(performance.now() - started);
   const collectedAt = new Date().toISOString();
   await writeFile(join(outputDir, "evidence-manifest.json"), JSON.stringify({
-    company, targetUrl: target.url, collectedAt, pages,
+    company, targetUrl: target.url, collectedAt, pages, timingsMs: timings,
     limitations: [
       "Public-surface evidence cannot prove private backend services, origin hosting behind a proxy, contracts, traffic, or actual spend.",
       "Browser metrics are single-run lab observations; INP and field Core Web Vitals require real-user data.",
+      "Mobile rendering was captured for the landing page; representative inner pages were captured at desktop size.",
       "Negative findings mean not observed under the recorded conditions, not confirmed absent.",
     ],
   }, null, 2));
