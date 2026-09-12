@@ -2,8 +2,9 @@ import { Database } from "bun:sqlite";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { mkdirSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isSupportedVideoUrl } from "./video";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -20,6 +21,14 @@ export type Board = {
   updatedAt: string;
 };
 
+export type BoardSummary = {
+  id: string;
+  revision: number;
+  updatedAt: string;
+  elementCount: number;
+  feedbackCount: number;
+};
+
 export type Feedback = {
   id: number;
   boardId: string;
@@ -34,6 +43,21 @@ export type ImageInput = {
   creator?: string;
   license?: string;
   query?: JsonObject;
+  x?: number;
+  y?: number;
+};
+
+export type VideoInput = {
+  url: string;
+  x?: number;
+  y?: number;
+};
+
+export type ComponentInput = {
+  template: "color" | "typography" | "design_element" | "website_section";
+  title: string;
+  content: string;
+  inspiration?: string;
   x?: number;
   y?: number;
 };
@@ -105,6 +129,71 @@ function extensionFor(mime: string): string {
   return ({ "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif" } as Record<string, string>)[mime] ?? "bin";
 }
 
+function videoUrl(value: string): string {
+  if (!isSupportedVideoUrl(value)) throw new Error("Video must be a supported public HTTPS URL");
+  return new URL(value).toString();
+}
+
+function componentElements(input: ComponentInput, x: number, y: number): JsonObject[] {
+  const componentId = crypto.randomUUID().slice(0, 20);
+  const title = input.title.trim();
+  const content = input.content.trim();
+  const inspiration = input.inspiration?.trim();
+  const meta = (role: string) => ({ canvasComponent: { id: componentId, template: input.template, role } });
+  const rectangle = (role: string, left: number, top: number, width: number, height: number, backgroundColor = "#ffffff") => ({
+    id: crypto.randomUUID().slice(0, 20), type: "rectangle", x: left, y: top, width, height, angle: 0, opacity: 100,
+    strokeColor: "#ced4da", backgroundColor, fillStyle: "solid", groupIds: [componentId], customData: meta(role),
+  });
+  const text = (role: string, value: string, left: number, top: number, width: number, fontSize: number, strokeColor = "#212529") => ({
+    id: crypto.randomUUID().slice(0, 20), type: "text", x: left, y: top, width, height: fontSize * 1.25,
+    text: value, originalText: value, fontSize, angle: 0, opacity: 100, strokeColor, groupIds: [componentId], customData: meta(role),
+  });
+
+  if (!title || !content) throw new Error("Component title and content are required");
+  if (title.length > 120 || content.length > 2_000 || (inspiration?.length ?? 0) > 2_000) throw new Error("Component text is too long");
+
+  switch (input.template) {
+    case "color": {
+      if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(content)) throw new Error("Color content must be a hex color");
+      return [
+        rectangle("container", x, y, 420, 220),
+        text("kind", "COLOR TOKEN", x + 24, y + 20, 160, 16, "#868e96"),
+        text("title", title, x + 24, y + 50, 372, 30),
+        rectangle("swatch", x + 24, y + 104, 92, 92, content),
+        text("value", content.toUpperCase(), x + 140, y + 132, 220, 24),
+      ];
+    }
+    case "typography":
+      return [
+        rectangle("container", x, y, 520, 240),
+        text("kind", "TYPOGRAPHY", x + 24, y + 20, 160, 16, "#868e96"),
+        text("title", title, x + 24, y + 50, 472, 24),
+        text("sample", content, x + 24, y + 104, 472, 36),
+      ];
+    case "design_element":
+      return [
+        rectangle("container", x, y, 520, 280),
+        text("kind", "DESIGN ELEMENT", x + 24, y + 20, 190, 16, "#868e96"),
+        text("title", title, x + 24, y + 50, 472, 30),
+        text("information", content, x + 24, y + 104, 472, 20),
+        ...(inspiration ? [text("inspiration", `Inspiration: ${inspiration}`, x + 24, y + 212, 472, 18, "#495057")] : []),
+      ];
+    case "website_section":
+      if (!inspiration) throw new Error("Website section inspiration is required");
+      return [
+        rectangle("container", x, y, 600, 320),
+        text("kind", "WEBSITE SECTION", x + 24, y + 20, 200, 16, "#868e96"),
+        text("title", title, x + 24, y + 50, 552, 30),
+        text("information_label", "Information", x + 24, y + 108, 160, 16, "#868e96"),
+        text("information", content, x + 24, y + 136, 552, 20),
+        text("inspiration_label", "Inspiration", x + 24, y + 224, 160, 16, "#868e96"),
+        text("inspiration", inspiration, x + 24, y + 252, 552, 20),
+      ];
+    default:
+      throw new Error("Unknown component template");
+  }
+}
+
 export class RevisionConflict extends Error {
   constructor(readonly actualRevision: number) {
     super(`Board changed at revision ${actualRevision}`);
@@ -159,6 +248,52 @@ export class CanvasStore {
     const now = new Date().toISOString();
     this.db.query("INSERT OR IGNORE INTO boards (id, revision, scene_json, updated_at) VALUES (?, 0, ?, ?)")
       .run(id, JSON.stringify(EMPTY_SCENE), now);
+  }
+
+  createBoard(id: string): BoardSummary {
+    const boardId = id.trim();
+    if (!boardId || boardId.length > 80) throw new Error("Canvas name must be between 1 and 80 characters");
+    const now = new Date().toISOString();
+    try {
+      this.db.query("INSERT INTO boards (id, revision, scene_json, updated_at) VALUES (?, 0, ?, ?)")
+        .run(boardId, JSON.stringify(EMPTY_SCENE), now);
+    } catch {
+      throw new Error("A canvas with that name already exists");
+    }
+    return { id: boardId, revision: 0, updatedAt: now, elementCount: 0, feedbackCount: 0 };
+  }
+
+  listBoards(query = ""): BoardSummary[] {
+    const term = query.trim();
+    const rows = (term
+      ? this.db.query(`
+          SELECT b.id, b.revision, b.scene_json, b.updated_at,
+            (SELECT COUNT(*) FROM feedback f WHERE f.board_id = b.id) AS feedback_count
+          FROM boards b
+          WHERE b.id LIKE ? OR b.scene_json LIKE ? OR EXISTS (
+            SELECT 1 FROM feedback f WHERE f.board_id = b.id AND f.comment LIKE ?
+          )
+          ORDER BY b.updated_at DESC, b.id ASC LIMIT 200
+        `).all(`%${term}%`, `%${term}%`, `%${term}%`)
+      : this.db.query(`
+          SELECT b.id, b.revision, b.scene_json, b.updated_at,
+            (SELECT COUNT(*) FROM feedback f WHERE f.board_id = b.id) AS feedback_count
+          FROM boards b ORDER BY b.updated_at DESC, b.id ASC LIMIT 200
+        `).all()) as Array<{ id: string; revision: number; scene_json: string; updated_at: string; feedback_count: number }>;
+    return rows.map(row => ({
+      id: row.id,
+      revision: row.revision,
+      updatedAt: row.updated_at,
+      elementCount: (JSON.parse(row.scene_json) as Scene).elements.length,
+      feedbackCount: row.feedback_count,
+    }));
+  }
+
+  async deleteBoard(id: string): Promise<void> {
+    const assets = this.db.query("SELECT path FROM assets WHERE board_id = ?").all(id) as Array<{ path: string }>;
+    const result = this.db.query("DELETE FROM boards WHERE id = ?").run(id);
+    if (result.changes < 1) throw new Error("Canvas not found");
+    await Promise.all(assets.map(asset => rm(asset.path, { force: true })));
   }
 
   async readBoard(id: string): Promise<Board> {
@@ -242,6 +377,43 @@ export class CanvasStore {
       }
     }
     return this.saveBoard(id, revision, scene);
+  }
+
+  async addVideos(id: string, revision: number, videos: VideoInput[]): Promise<Board> {
+    if (!videos.length || videos.length > 20) throw new Error("Provide between 1 and 20 videos");
+    const board = await this.readBoard(id);
+    if (board.revision !== revision) throw new RevisionConflict(board.revision);
+    for (const [index, input] of videos.entries()) {
+      board.scene.elements.push({
+        id: crypto.randomUUID().slice(0, 20), type: "embeddable", link: videoUrl(input.url),
+        x: input.x ?? 80 + (index % 2) * 600, y: input.y ?? 80 + Math.floor(index / 2) * 355,
+        width: 560, height: 315, angle: 0, opacity: 100,
+      });
+    }
+    return this.saveBoard(id, revision, board.scene);
+  }
+
+  async addComponents(id: string, revision: number, components: ComponentInput[]): Promise<Board> {
+    if (!Array.isArray(components) || !components.length || components.length > 20) throw new Error("Provide between 1 and 20 components");
+    const board = await this.readBoard(id);
+    if (board.revision !== revision) throw new RevisionConflict(board.revision);
+    const existingComponentIds = new Set<string>();
+    for (const element of board.scene.elements) {
+      const customData = element.customData;
+      const component = customData && typeof customData === "object" ? (customData as JsonObject).canvasComponent : null;
+      if (component && typeof component === "object" && typeof (component as JsonObject).id === "string") existingComponentIds.add((component as JsonObject).id as string);
+    }
+    for (const [index, input] of components.entries()) {
+      if (!input || typeof input !== "object" || !["color", "typography", "design_element", "website_section"].includes(input.template)) {
+        throw new Error("Unknown component template");
+      }
+      const position = existingComponentIds.size + index;
+      const x = input.x ?? 80 + (position % 2) * 680;
+      const y = input.y ?? 80 + Math.floor(position / 2) * 400;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("Component position must be finite");
+      board.scene.elements.push(...componentElements(input, x, y));
+    }
+    return this.saveBoard(id, revision, board.scene);
   }
 
   async updateItem(id: string, revision: number, itemId: string, patch: JsonObject): Promise<Board> {

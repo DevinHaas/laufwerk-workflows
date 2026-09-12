@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { CanvasStore, RevisionConflict, type Feedback, type ImageInput, type JsonObject, type Scene } from "./store";
+import { CanvasStore, RevisionConflict, type ComponentInput, type Feedback, type ImageInput, type JsonObject, type Scene, type VideoInput } from "./store";
 
 const port = Number(process.env.PORT ?? 3000);
 const token = process.env.CANVAS_TOKEN;
@@ -13,8 +13,14 @@ await store.init();
 store.ensureBoard(defaultBoard);
 
 const tools = [
+  { name: "list_boards", description: "List canvases, newest first.", inputSchema: { type: "object", properties: {} } },
+  { name: "search_boards", description: "Search canvas names, scene content, and feedback comments.", inputSchema: { type: "object", required: ["query"], properties: { query: { type: "string" } } } },
+  { name: "create_board", description: "Create an empty canvas with a unique name.", inputSchema: { type: "object", required: ["boardId"], properties: { boardId: { type: "string" } } } },
+  { name: "delete_board", description: "Permanently delete a canvas, its feedback, and managed assets.", inputSchema: { type: "object", required: ["boardId"], properties: { boardId: { type: "string" } } } },
   { name: "read_board", description: "Read the current Excalidraw board and revision.", inputSchema: { type: "object", properties: { boardId: { type: "string" } } } },
   { name: "add_images", description: "Download public images into managed storage and add them to the board.", inputSchema: { type: "object", required: ["revision", "images"], properties: { boardId: { type: "string" }, revision: { type: "integer" }, images: { type: "array", items: { type: "object", required: ["url"], properties: { url: { type: "string" }, creator: { type: "string" }, license: { type: "string" }, query: { type: "object" }, x: { type: "number" }, y: { type: "number" } } } } } } },
+  { name: "add_videos", description: "Embed public YouTube, Vimeo, or 21st.dev videos on the board.", inputSchema: { type: "object", required: ["revision", "videos"], properties: { boardId: { type: "string" }, revision: { type: "integer" }, videos: { type: "array", items: { type: "object", required: ["url"], properties: { url: { type: "string" }, x: { type: "number" }, y: { type: "number" } } } } } } },
+  { name: "add_components", description: "Add grouped, searchable color, typography, design-element, or website-section templates to the board. Use content for a hex color, type sample, or descriptive information; website sections also require inspiration.", inputSchema: { type: "object", required: ["revision", "components"], properties: { boardId: { type: "string" }, revision: { type: "integer" }, components: { type: "array", minItems: 1, maxItems: 20, items: { type: "object", required: ["template", "title", "content"], properties: { template: { type: "string", enum: ["color", "typography", "design_element", "website_section"] }, title: { type: "string" }, content: { type: "string" }, inspiration: { type: "string" }, x: { type: "number" }, y: { type: "number" } } } } } } },
   { name: "update_item", description: "Update position, size, appearance, or text on one item.", inputSchema: { type: "object", required: ["revision", "itemId", "patch"], properties: { boardId: { type: "string" }, revision: { type: "integer" }, itemId: { type: "string" }, patch: { type: "object" } } } },
   { name: "remove_item", description: "Remove one item from the board.", inputSchema: { type: "object", required: ["revision", "itemId"], properties: { boardId: { type: "string" }, revision: { type: "integer" }, itemId: { type: "string" } } } },
   { name: "add_note", description: "Add a text note to the board.", inputSchema: { type: "object", required: ["revision", "text"], properties: { boardId: { type: "string" }, revision: { type: "integer" }, text: { type: "string" }, x: { type: "number" }, y: { type: "number" } } } },
@@ -41,8 +47,14 @@ async function body(request: Request): Promise<JsonObject> {
 async function callTool(name: string, input: JsonObject): Promise<unknown> {
   const boardId = typeof input.boardId === "string" && input.boardId ? input.boardId : defaultBoard;
   switch (name) {
+    case "list_boards": return store.listBoards();
+    case "search_boards": return store.listBoards(String(input.query ?? ""));
+    case "create_board": return store.createBoard(boardId);
+    case "delete_board": await store.deleteBoard(boardId); return { deleted: boardId };
     case "read_board": return store.readBoard(boardId);
     case "add_images": return store.addImages(boardId, Number(input.revision), input.images as ImageInput[]);
+    case "add_videos": return store.addVideos(boardId, Number(input.revision), input.videos as VideoInput[]);
+    case "add_components": return store.addComponents(boardId, Number(input.revision), input.components as ComponentInput[]);
     case "update_item": return store.updateItem(boardId, Number(input.revision), String(input.itemId), input.patch as JsonObject);
     case "remove_item": return store.removeItem(boardId, Number(input.revision), String(input.itemId));
     case "add_note": return store.addNote(boardId, Number(input.revision), String(input.text), input.x === undefined ? undefined : Number(input.x), input.y === undefined ? undefined : Number(input.y));
@@ -98,8 +110,17 @@ Bun.serve({
       if (!authorized(request)) return json({ error: "Unauthorized" }, 401);
       try {
         if (url.pathname === "/mcp" && request.method === "POST") return mcp(request);
+        if (url.pathname === "/api/boards" && request.method === "GET") return json(store.listBoards(url.searchParams.get("q") ?? ""));
+        if (url.pathname === "/api/boards" && request.method === "POST") {
+          const input = await body(request);
+          return json(store.createBoard(String(input.id ?? "")), 201);
+        }
         const boardMatch = url.pathname.match(/^\/api\/boards\/([^/]+)$/);
         if (boardMatch && request.method === "GET") return json(await store.readBoard(decodeURIComponent(boardMatch[1]!)));
+        if (boardMatch && request.method === "DELETE") {
+          await store.deleteBoard(decodeURIComponent(boardMatch[1]!));
+          return new Response(null, { status: 204 });
+        }
         if (boardMatch && request.method === "PUT") {
           const input = await body(request);
           return json(await store.saveBoard(decodeURIComponent(boardMatch[1]!), Number(input.revision), input.scene as Scene));
