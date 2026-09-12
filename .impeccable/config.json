@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "web/styles.css"
+        ],
+        "createdAt": "2026-09-12T01:11:11.044Z",
+        "reason": "Agent: .new-canvas has no border-radius; its coral top rule is on a square card"
+      }
+    ]
+  }
+}
