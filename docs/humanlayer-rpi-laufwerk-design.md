@@ -16,12 +16,12 @@ Laufwerk already has most of the orchestration primitives needed for this model:
 The smallest useful design is therefore:
 
 - Laufwerk owns workflow state, phase transitions, agent sessions, and durable waits.
-- Plane owns the source work item, phase/status tracking, notifications, and the task-level discussion.
-- A dedicated private GitHub repository owns the first version of task artifacts and their machine-readable review history.
+- GitHub owns the source issue, phase/status labels, notifications, task discussion, artifacts, and review history.
+- A dedicated private GitHub repository keeps workflow artifacts separate from product code.
 - Each task gets one long-lived artifact pull request. Markdown plans are added as files, so reviewers can comment on exact lines and approve or request changes from a phone.
 - Each phase ends its Codex session before waiting for review. A later phase starts a fresh session and reads the approved artifacts.
 - The source issue links to the artifact pull request; the final code pull request links back to both.
-- Plane Pages are a strong future canonical store, but Plane's currently documented agent surface does not expose Page inline-comment threads even though the UI supports them.
+- No second project-management or document system is required.
 - Object storage should be added only when interactive HTML, large files, or private binary previews become an actual requirement.
 
 This gives Laufwerk the core HumanLayer behavior without first building a document collaboration product.
@@ -176,15 +176,17 @@ Important gaps and constraints:
 | GitHub issue body/comments | Edit history and timeline | No | Strong | Attach/download | Strong | Intake and task timeline |
 | GitHub artifact branch + pull request | Strong Git history | Yes, on PR diff | Good | Images/PDF reasonable; HTML weak | Strong | Best MVP canonical store |
 | GitHub Actions artifacts | Immutable run output | No | Download-oriented | Weak | Strong | Logs/build output only; default retention is 90 days^7 |
-| Plane work item + comments | Strong activity history | No document anchors | Strong | Attachments | Strong REST/webhooks/MCP | Best task/status control plane^8 |
-| Plane Page | Page version history | Yes in the UI | Strong, including inline comment review | Strong, including embedded HTML | Partial: Page CRUD exists, but no public Page-comment action is documented | Best eventual artifact UI; agent feedback loop has a current gap^8 |
 | Laufwerk DB + object storage + custom viewer | Can be ideal | Can be ideal | Must be built | Strong | Native | Best eventual product, highest initial cost |
 
-### Recommendation: Plane for work, GitHub for reviewed artifact bytes
+### Recommendation: GitHub as the only external system
 
-Use Plane as the front door. One Plane work item represents the task, its state represents the Laufwerk phase, and its comments carry task-level discussion and notifications. Plane exposes work-item comments, attachments, activity history, and signed webhooks; its official MCP server supports work items, comments, attachments, Pages, modules, milestones, and other project resources.^8
+Use GitHub for all externally visible workflow state:
 
-Use a dedicated private GitHub artifact repository for the canonical phase documents and exact agent-readable inline feedback. This is a temporary split caused by one concrete API gap, not a general preference for two systems.
+1. The source issue owns the request, general discussion, and current phase label.
+2. One artifact pull request in a dedicated private repository owns research, PRD/TDD, plans, inline comments, revisions, and approvals.
+3. One code pull request in the source repository owns the implementation diff and code review.
+
+These are three GitHub objects, not three systems. Laufwerk remains the durable orchestrator and remote execution runtime.
 
 Create one private repository, for example `laufwerk-artifacts`, with one artifact pull request per task. Its branch contains:
 
@@ -202,37 +204,19 @@ tasks/<task-id>/
   manifest.json
 ```
 
-All task files are new relative to the artifact repository's main branch until the task finishes. GitHub can therefore attach pull-request comments to their added lines. Review comments support line or multi-line anchors, replies, and file-level comments; an approval or request-changes review provides an explicit decision.^9 Later edits may mark comments outdated, which is desirable history rather than data loss.
+All task files are new relative to the artifact repository's main branch until the task finishes. GitHub can therefore attach pull-request comments to their added lines. Review comments support line or multi-line anchors, replies, and file-level comments; an approval or request-changes review provides an explicit decision.^8 Later edits may mark comments outdated, which is desirable history rather than data loss.
 
-The artifact PR should be opened by a GitHub App or bot, leaving the human able to approve it. The workflow accepts only reviews from configured maintainer IDs and only when the review targets the current head SHA. GitHub notes that comments tied to an older commit can become outdated; matching the current head prevents an old approval from advancing new content.^9
+The artifact PR should be opened by a GitHub App or bot, leaving the human able to approve it. The workflow accepts only reviews from configured maintainer IDs and only when the review targets the current head SHA. GitHub notes that comments tied to an older commit can become outdated; matching the current head prevents an old approval from advancing new content.^8
 
 When the task completes, merge the artifact PR. This gives permanent Git history without placing planning files in the product repository. The source issue and final code PR retain links to the merged artifact directory and its review history.
 
 Do not use GitHub Actions artifacts as the canonical store. They are optimized for build outputs, have retention limits, disappear when their workflow run is deleted, and do not provide inline document review.^7
 
-### What Plane changes—and what still blocks a Plane-only design
+### GitHub task-state convention
 
-Plane is much closer to HumanLayer's task model than an ordinary issue tracker:
+Use labels on the source issue for the current workflow phase, for example `rpi:questions`, `rpi:research`, `rpi:design`, `rpi:plan`, `rpi:implementation`, and `rpi:review`. Laufwerk updates one issue comment, identified by a hidden marker, with links to the current artifact, pending action, latest check result, and code PR.
 
-- Work items are assignable, stateful units with comments, attachments, and a complete activity history.
-- Work-item comment creation/listing is public API functionality, and issue-comment webhooks can wake Laufwerk immediately.^8
-- Pages provide shared project documentation, Markdown-compatible editing, version history, and exact-text inline comment threads. Plane's mobile release supports viewing and resolving Page inline comments.^8
-- Plane Cloud now supports comparing Page versions and embedding interactive HTML artifacts directly in Pages.^8
-- Plane's official MCP server exposes Page list, retrieve, create, update, archive, attach-to-work-item, and detach operations over local or hosted transports.^8
-
-That makes Plane an excellent control plane and potentially the best long-term artifact UI. The present blocker is automation of the review loop. The official MCP tool catalog exposes work-item comments, but no Page-comment resource or action. Plane's public webhook documentation lists issue comments, not Page comments. Therefore an agent can publish and update a Page, while a person can leave an inline Page comment, but there is no documented public operation for Laufwerk to fetch, reply to, resolve, or receive a webhook for that inline thread. This is an inference from the currently published API, webhook, and MCP surfaces.^8
-
-Self-hosted Plane also needs a compatibility check before relying on Pages automation. Plane's public API documentation lists Page endpoints, but open reports against 2026 self-hosted releases show API-key-authenticated Page routes returning 404 while other v1 resources work.^10 Plane Cloud and newer releases may differ, so the first spike should test the exact deployment rather than assume parity.
-
-A Plane-only MVP is possible if document-level or section-level feedback is sufficient: publish each artifact as a Page, attach it to the task work item, and collect feedback in work-item comments using a stable heading or quoted-text convention. That path is simpler, but it does not yet equal HumanLayer's inline artifact-comment loop.
-
-For exact inline feedback today, the recommended hybrid is:
-
-1. Plane work item: task identity, source issue, workflow state, notification, and general discussion.
-2. GitHub artifact PR: canonical Markdown/JSON, line comments, revision history, and approval.
-3. Source-repository PR: implementation diff and code review.
-
-Each object links to the other two. Do not mirror editable artifact bodies into both GitHub and Plane Pages; that would create two competing sources of truth. If Plane adds supported Page-comment API/MCP/webhook operations, migrate the artifact body and review gate to Plane Pages and keep GitHub only for code.
+The artifact PR is the only editable specification source. The issue summarizes and links; it never duplicates full artifact bodies. This avoids synchronization logic and makes recovery a GitHub lookup rather than a database reconciliation.
 
 ### When to add object storage
 
@@ -336,15 +320,13 @@ Model review is useful backpressure but cannot replace the human product/design 
 
 ```mermaid
 flowchart LR
-  Phone[Phone / Plane + GitHub UI] -->|task status| Plane[Plane work item]
-  Phone -->|inline comments & approval| GitHub[GitHub artifact PR]
-  Plane -->|signed comment/status webhook| Engine[Laufwerk durable workflow engine]
+  Phone[Phone / GitHub UI] -->|issue discussion, inline comments, approval| GitHub[GitHub issues and PRs]
   GitHub -->|poll now; webhook later| Engine[Laufwerk durable workflow engine]
   Engine -->|phase job| Worker[Remote Laufwerk worker]
   Worker -->|fresh Codex session| Repo[Remote repository workspace]
-  Worker -->|commit artifact| GitHub
+  Worker -->|artifact commits and status updates| GitHub
   Worker -->|phase commit / final PR| Source[Source repository]
-  Engine -->|phase status / notification| Plane
+  Engine -->|phase labels and notification comments| GitHub
 ```
 
 For the current SDK, the simplest deployable topology is to run the Laufwerk workflow process and `createLocalExecution` on the remote machine that holds the checkout and Codex credentials. GitHub remains reachable from the phone and survives worker restarts. True scheduling onto interchangeable remote workers is a separate Laufwerk platform capability because the installed execution package exposes only local and local-Docker targets.
@@ -399,7 +381,7 @@ Add object storage and a thin authenticated viewer for HTML or large binaries. P
 
 Only three product choices materially affect Slice 1:
 
-1. **Artifact location:** dedicated private GitHub repository is recommended until Plane exposes Page comments to integrations; a Plane-only Page spike is worthwhile if section-level feedback is acceptable.
+1. **Artifact location:** use one dedicated private GitHub repository so workflow documents do not pollute product repositories.
 2. **Approval authority:** explicit allowlist of GitHub user IDs is recommended; repository write access alone may be too broad.
 3. **Workflow host:** one persistent remote Laufwerk host is recommended for the alpha SDK; interchangeable workers require platform work beyond this repository.
 
@@ -414,6 +396,4 @@ Everything else can use the defaults above and be revised after the first real t
 5. HumanLayer. “[How workflow phases fit together](https://docs.humanlayer.com/explanation/workflow-phases).” Accessed September 2026.
 6. HumanLayer. “[How Remote Daemons Work](https://docs.humanlayer.com/explanation/remote-daemons).” Accessed September 2026.
 7. GitHub. “[Workflow artifacts](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflow-artifacts)” and “[Removing workflow artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/remove-workflow-artifacts).” Accessed September 2026.
-8. Plane. “[Work Item Comments](https://developers.plane.so/api-reference/issue-comment/overview),” “[Webhooks](https://developers.plane.so/dev-tools/intro-webhooks),” “[Pages API](https://developers.plane.so/api-reference/page/overview),” “[Inline comments in Pages](https://plane.so/changelog/2025-10-15-ai-work-creation-inline-comments-filters),” “[Mobile inline comments](https://plane.so/changelog/new-on-plane-mobile-release-v1-19-0),” “[Page versions and HTML artifacts](https://plane.so/changelog/2026-07-31-skills-plane-ai-richer-pages-audit-logs),” and “[Official Plane MCP server](https://github.com/makeplane/plane-mcp-server).” Accessed September 2026.
-9. GitHub. “[REST API endpoints for pull request review comments](https://docs.github.com/en/rest/pulls/comments)” and “[Reviewing proposed changes in a pull request](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/reviewing-proposed-changes-in-a-pull-request).” Accessed September 2026.
-10. Plane community reports in the official repository. “[Pages API not exposed in public REST API on self-hosted instances](https://github.com/makeplane/plane/issues/8986)” and “[Self-hosted Plane v1.3.1 Pages API differs from documented contract](https://github.com/makeplane/plane/issues/9484).” 2026.
+8. GitHub. “[REST API endpoints for pull request review comments](https://docs.github.com/en/rest/pulls/comments)” and “[Reviewing proposed changes in a pull request](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/reviewing-proposed-changes-in-a-pull-request).” Accessed September 2026.
